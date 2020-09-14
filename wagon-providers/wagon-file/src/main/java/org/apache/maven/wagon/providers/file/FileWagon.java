@@ -22,11 +22,13 @@ package org.apache.maven.wagon.providers.file;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -61,26 +63,26 @@ public class FileWagon
 
         Resource resource = inputData.getResource();
 
-        File file = new File( getRepository().getBasedir(), resource.getName() );
+        Path file = Paths.get( getRepository().getBasedir(), resource.getName() );
 
-        if ( !file.exists() )
+        if ( Files.notExists( file ) )
         {
             throw new ResourceDoesNotExistException( "File: " + file + " does not exist" );
         }
 
         try
         {
-            InputStream in = new BufferedInputStream( new FileInputStream( file ) );
+            InputStream in = new BufferedInputStream( Files.newInputStream( file ) );
 
             inputData.setInputStream( in );
 
-            resource.setContentLength( file.length() );
+            resource.setContentLength( Files.size( file ) );
 
-            resource.setLastModified( file.lastModified() );
+            resource.setLastModified( Files.getLastModifiedTime( file ).toMillis() );
         }
-        catch ( FileNotFoundException e )
+        catch ( IOException e )
         {
-            throw new TransferFailedException( "Could not read from file: " + file.getAbsolutePath(), e );
+            throw new TransferFailedException( "Could not read from file: " + file.toAbsolutePath(), e );
         }
     }
 
@@ -119,17 +121,21 @@ public class FileWagon
         }
 
         // Check the File repository exists
-        File basedir = new File( getRepository().getBasedir() );
-        if ( !basedir.exists() )
+        Path basedir = Paths.get( getRepository().getBasedir() );
+        if ( Files.notExists( basedir ) )
         {
-            if ( !basedir.mkdirs() )
+            try
+            {
+                Files.createDirectories( basedir );
+            }
+            catch ( IOException e )
             {
                 throw new ConnectionException( "Repository path " + basedir + " does not exist,"
                                                + " and cannot be created." );
             }
         }
 
-        if ( !basedir.canRead() )
+        if ( ! Files.isReadable( basedir ) )
         {
             throw new ConnectionException( "Repository path " + basedir + " cannot be read" );
         }
@@ -153,7 +159,7 @@ public class FileWagon
             throw new TransferFailedException( "Unable to putDirectory() with a null basedir." );
         }
 
-        File path = resolveDestinationPath( destinationDirectory );
+        Path path = resolveDestinationPath( destinationDirectory );
 
         try
         {
@@ -165,22 +171,29 @@ public class FileWagon
              * path.getCanonicalFile() ensures that the path is fully resolved before an attempt to create it. TODO:
              * consider moving this to FileUtils.mkdirs()
              */
-            File realFile = path.getCanonicalFile();
-            realFile.mkdirs();
+            Path realFile = path.normalize();
+            Files.createDirectories( realFile );
         }
         catch ( IOException e )
         {
-            // Fall back to standard way if getCanonicalFile() fails.
-            path.mkdirs();
+            // Fall back to standard way if normalize() fails.
+            try 
+            {
+                Files.createDirectories( path );
+            } 
+            catch ( IOException e1 ) 
+            {
+                // ignored
+            }
         }
 
-        if ( !path.exists() || !path.isDirectory() )
+        if ( Files.notExists( path ) || ! Files.isDirectory( path ) )
         {
-            String emsg = "Could not make directory '" + path.getAbsolutePath() + "'.";
+            String emsg = "Could not make directory '" + path.toAbsolutePath() + "'.";
 
             // Add assistive message in case of failure.
-            File basedir = new File( getRepository().getBasedir() );
-            if ( !basedir.canWrite() )
+            Path basedir = Paths.get( getRepository().getBasedir() );
+            if ( ! Files.isWritable( basedir ) )
             {
                 emsg += "  The base directory " + basedir + " is read-only.";
             }
@@ -190,7 +203,7 @@ public class FileWagon
 
         try
         {
-            FileUtils.copyDirectoryStructure( sourceDirectory, path );
+            FileUtils.copyDirectoryStructure( sourceDirectory, path.toFile() );
         }
         catch ( IOException e )
         {
@@ -198,22 +211,14 @@ public class FileWagon
         }
     }
 
-    private File resolveDestinationPath( String destinationPath )
+    private Path resolveDestinationPath( String destinationPath )
     {
         String basedir = getRepository().getBasedir();
 
+        // TODO presumably not needed anymore with Java 7's NIO file API
         destinationPath = destinationPath.replace( "\\", "/" );
 
-        File path;
-
-        if ( destinationPath.equals( "." ) )
-        {
-            path = new File( basedir );
-        }
-        else
-        {
-            path = new File( basedir, destinationPath );
-        }
+        Path path = Paths.get( basedir, destinationPath ).normalize();
 
         return path;
     }
@@ -226,29 +231,33 @@ public class FileWagon
             throw new TransferFailedException( "Unable to getFileList() with a null basedir." );
         }
 
-        File path = resolveDestinationPath( destinationDirectory );
+        Path path = resolveDestinationPath( destinationDirectory );
 
-        if ( !path.exists() )
+        if ( Files.notExists( path ) )
         {
             throw new ResourceDoesNotExistException( "Directory does not exist: " + destinationDirectory );
         }
 
-        if ( !path.isDirectory() )
+        if ( ! Files.isDirectory( path ) )
         {
             throw new ResourceDoesNotExistException( "Path is not a directory: " + destinationDirectory );
         }
 
-        File[] files = path.listFiles();
-
-        List<String> list = new ArrayList<String>( files.length );
-        for ( File file : files )
+        List<String> list = new ArrayList<>();
+        try ( DirectoryStream<Path> directoryStream = Files.newDirectoryStream( path ) ) 
         {
-            String name = file.getName();
-            if ( file.isDirectory() && !name.endsWith( "/" ) )
+            for ( Path file : directoryStream ) 
             {
-                name += "/";
+                String name = file.getFileName().toString();
+                if ( Files.isDirectory( file ) && !name.endsWith( "/" ) )
+                {
+                    name += "/";
+                }
+                list.add( name );
             }
-            list.add( name );
+        } catch ( IOException e )
+        {
+            // nothing to do as this ONLY happens in case directoryStream.close() fails, so the list is correct
         }
         return list;
     }
@@ -261,13 +270,13 @@ public class FileWagon
             throw new TransferFailedException( "Unable to getFileList() with a null basedir." );
         }
 
-        File file = resolveDestinationPath( resourceName );
+        Path file = resolveDestinationPath( resourceName );
 
         if ( resourceName.endsWith( "/" ) )
         {
-            return file.isDirectory();
+            return Files.isDirectory( file );
         }
 
-        return file.exists();
+        return Files.exists( file );
     }
 }

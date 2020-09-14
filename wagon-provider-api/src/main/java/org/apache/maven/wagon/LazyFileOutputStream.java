@@ -20,12 +20,11 @@ package org.apache.maven.wagon;
  */
 
 import java.io.File;
-import java.io.FileDescriptor;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 
 /**
@@ -39,19 +38,19 @@ public class LazyFileOutputStream
     extends OutputStream
 {
 
-    private File file;
+    private Path file;
 
-    private FileOutputStream delegee;
+    private OutputStream delegee;
 
 
     public LazyFileOutputStream( String filename )
     {
-        this.file = new File( filename );
+        this.file = Paths.get( filename );
     }
 
     public LazyFileOutputStream( File file )
     {
-        this.file = file;
+        this.file = file.toPath();
     }
 
 
@@ -80,18 +79,6 @@ public class LazyFileOutputStream
         }
     }
 
-
-    public FileChannel getChannel()
-    {
-        return delegee.getChannel();
-    }
-
-
-    public FileDescriptor getFD()
-        throws IOException
-    {
-        return delegee.getFD();
-    }
 
     public int hashCode()
     {
@@ -149,8 +136,8 @@ public class LazyFileOutputStream
      * 
      */
     private void initialize()
-        throws FileNotFoundException
+        throws IOException
     {
-        delegee = new FileOutputStream( file );
+        delegee = Files.newOutputStream( file );
     }
 }
